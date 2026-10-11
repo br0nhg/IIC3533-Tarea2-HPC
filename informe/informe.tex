@@ -1,0 +1,195 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[spanish,es-tabla]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{graphicx,booktabs,multirow,float,amsmath,amssymb,listings,xcolor,hyperref}
+\usepackage{caption}
+\captionsetup{font=small,labelfont=bf}
+\graphicspath{{figs/}}
+\lstset{basicstyle=\ttfamily\footnotesize,frame=single,breaklines=true,
+        keywordstyle=\color{blue!60!black},commentstyle=\color{gray}}
+
+% Etiquetas de los computadores (deben coincidir con las carpetas de results/)
+\newcommand{\pcA}{pc1-mac}
+\newcommand{\pcB}{pc2-ubuntu}
+
+% Notas del borrador: borrar \nota{...} al redactar la version final.
+\newcommand{\nota}[1]{\par\noindent\colorbox{yellow!25}{\parbox{\dimexpr\linewidth-2\fboxsep}{\small\textbf{Borrador:} #1}}\par}
+
+\title{Tarea 2: Multiplicación de matrices con OpenMP y Numba\\
+\large IIC3533 Computación de Alto Rendimiento · 2026-2}
+\author{Integrante 1 \and Integrante 2 \and Integrante 3}
+\date{16 de octubre de 2026}
+
+\begin{document}
+\maketitle
+
+% ======================================================================
+\section{Introducción}
+\nota{Contexto: $C=A\cdot B$ densa de $N\times N$ con costo $O(N^3)$ ($2N^3$ FLOP). Se estudian tres versiones paralelas: (1) paralelismo de datos con OpenMP, (2) dividir y conquistar con tareas OpenMP y (3) Numba. Objetivo: medir el tiempo, el speedup y la eficiencia, y estudiar el efecto del tamaño de bloque, del tamaño del problema y del hardware.}
+
+% ======================================================================
+\section{Metodología}
+\subsection{Computadores}
+\input{tablas/g_maquinas}
+\nota{Completar la frecuencia de reloj. PC1: Apple M5, 10 cores físicos = 4 de rendimiento (P) + 6 de eficiencia (E), sin SMT (físicos = lógicos); la frecuencia máxima de los P-cores es $\approx$ X GHz según la especificación de Apple, ya que macOS no la expone. PC2: ver \texttt{results/\pcB/machine.txt} (\texttt{lscpu}).}
+
+\subsection{Compilación, medición y verificación}
+\begin{itemize}
+  \item C++ compilado con \texttt{-O3 -march=native -fopenmp}. En macOS (Apple clang, ARM) el equivalente es \texttt{-O3 -mcpu=native -Xpreprocessor -fopenmp -lomp} con \texttt{libomp} de Homebrew. En Ubuntu se usa \texttt{g++}.
+  \item Las matrices se inicializan de forma determinista (igual que \texttt{serial.cpp}): $A_{ij}=\sin(0.1i+0.3j+1)$ y $B_{ij}=\sin(0.1i+0.3j+2)$.
+  \item Solo se mide el tiempo de la multiplicación (sin inicialización). Se hacen 5 repeticiones (3 para $N=4096$) y se reporta la \textbf{mediana}.
+  \item \textbf{Verificación:} cada versión paralela compara la matriz $C$ completa contra la multiplicación serial de referencia (error máximo $=0$ en todas las pruebas) y entrega el mismo checksum que \texttt{serial.cpp}.
+  \item Threads: \texttt{OMP\_NUM\_THREADS=p} en C++ y \texttt{numba.set\_num\_threads(p)} en Python. En Linux se usa \texttt{OMP\_PROC\_BIND=close}, \texttt{OMP\_PLACES=cores}; macOS no permite fijar la afinidad.
+  \item Todo el código y los datos crudos están en el repositorio \url{https://github.com/br0nhg/IIC3533-Tarea2-HPC} (\texttt{run\_all.sh} reproduce todos los experimentos).
+\end{itemize}
+
+% ======================================================================
+\section{(a) Base serial y tamaño de bloque}
+\begin{figure}[H]\centering
+  \includegraphics[width=0.8\linewidth]{a_serial_bloque.pdf}
+  \caption{Tiempo de \texttt{serial.cpp} con $N=2048$ según el tamaño de hoja $n$.}
+  \label{fig:a}
+\end{figure}
+\input{tablas/a_serial_bloque}
+\nota{Observaciones (\pcA): el tiempo \emph{crece} monótonamente al achicar $n$: 0.99 s ($n=2048$), 1.04, 1.08, 1.23, 1.26, 1.55 y 2.19 s ($n=32$, $2.2\times$ más lento). En una sola hebra del M5, subdividir no conviene:
+\begin{itemize}
+\item La hoja i-k-j ya recorre $B$ y $C$ por filas (acceso contiguo, que el prefetcher de hardware anticipa bien y que se vectoriza con SIMD NEON). Además, la L2 del clúster de P-cores es grande (16 MB) y el ancho de banda de memoria es alto, así que la localidad extra del blocking aporta poco.
+\item Overhead: con hojas de $n$ hay $(N/n)^3$ llamadas a \texttt{multiply\_leaf} (262\,144 con $n=32$, frente a 1 con $n=N$), y el loop interno tiene solo $n$ iteraciones (32 doubles = 2 líneas de caché de 128 B). Esto se traduce en más saltos, prólogo y epílogo de vectorización y peor prefetch.
+\item Las tres submatrices de una hoja ocupan $3\cdot 8n^2$ B: 24 KB ($n=32$), 96 KB ($n=64$, cabe en L1D de 128 KB), 384 KB ($n=128$) y 1.5 MB ($n=256$). Aun cuando caben en L1/L2, la ganancia de localidad no compensa el overhead.
+\item Lo importante es que este resultado es \emph{serial}. En paralelo, donde varios cores comparten la L2 y el ancho de banda, el blocking sí ayuda (ver (c) y (f)).
+\end{itemize}}
+
+% ======================================================================
+\section{(b) Algoritmo 1: paralelismo de datos con OpenMP}
+\begin{lstlisting}[language=C++]
+#pragma omp parallel for schedule(static)
+for (int i = 0; i < N; ++i)
+    for (int k = 0; k < N; ++k) {
+        double a = A[i*N + k];
+        for (int j = 0; j < N; ++j)
+            C[i*N + j] += a * B[k*N + j];
+    }
+\end{lstlisting}
+\nota{Implementación: se reparte el loop externo $i$ (filas de $C$) en bloques contiguos (\texttt{schedule(static)}). Cada thread escribe filas disjuntas de $C$, por lo que no hay carreras ni sincronización (solo la barrera implícita al final). El orden i-k-j recorre $B$ y $C$ por filas (acceso contiguo, vectorizable con SIMD). Como todas las iteraciones cuestan lo mismo, un scheduling estático es suficiente.}
+\input{tablas/bcd_escalamiento_\pcA}
+\nota{Observaciones Alg.~1 (\pcA, $N=2048$): $T(1)=0.99$ s y $T(8)=0.32$ s; $S=1.63,\,2.27,\,3.09$ y $E=0.82,\,0.57,\,0.39$ para $p=2,4,8$. El speedup está lejos del ideal:
+\begin{itemize}
+\item \textbf{Ancho de banda de memoria:} para cada fila $i$ se recorre toda $B$ (32 MB con $N=2048$, que no cabe en la L2 de 16 MB). Así, todos los threads compiten por leer $B$ desde DRAM y el kernel queda limitado por memoria, no por cómputo. Con $N=1024$ ($B=8$ MB cabe en L2) la eficiencia es claramente mejor (ver (f)).
+\item \textbf{Cores heterogéneos:} el M5 tiene solo 4 P-cores. Con $p=8$, al menos 4 threads corren en E-cores (más lentos, con L2 propia de 6 MB). Probamos \texttt{schedule(dynamic,16)} y \texttt{guided}: solo mejoran $\sim$3--5\%, y usar $p=10$ casi no cambia el tiempo (0.29--0.31 s). Esto confirma que el límite principal es la memoria y no el desbalance.
+\item No hay sincronización ni carreras (filas disjuntas), así que la pérdida no es por overhead de OpenMP.
+\end{itemize}}
+
+% ======================================================================
+\section{(c) Algoritmo 2: dividir y conquistar con tareas OpenMP}
+\begin{lstlisting}[language=C++]
+void multiply_rec_task(A, B, C, n, depth) {
+    if (C.size <= n) { multiply_leaf(A, B, C); return; }
+    int h = C.size / 2;
+    for (bi in {0,1}) for (bj in {0,1}) {
+        #pragma omp task firstprivate(bi, bj) if(spawn)
+        {   // C_ij += A_i1 B_1j ; luego C_ij += A_i2 B_2j  (en secuencia)
+            multiply_rec_task(A(bi,0), B(0,bj), C(bi,bj), n, depth+1);
+            multiply_rec_task(A(bi,1), B(1,bj), C(bi,bj), n, depth+1);
+        }
+    }
+    #pragma omp taskwait
+}
+// main:  #pragma omp parallel  /  #pragma omp single  multiply_rec_task(...)
+\end{lstlisting}
+\nota{Detalles de implementación:
+(1) Un solo thread (\texttt{single}) inicia la recursión dentro de una región \texttt{parallel} y el resto de los threads toma tareas del pool.
+(2) En cada nivel se crean 4 tareas independientes, una por cuadrante $C_{ij}$. Los dos productos que acumulan en el mismo $C_{ij}$ se ejecutan en secuencia dentro de la misma tarea, así que dos tareas concurrentes nunca escriben el mismo bloque: no hay carreras, ni atomics, ni matrices temporales.
+(3) \texttt{taskwait} garantiza que el bloque esté completo antes de retornar.
+(4) Se usan vistas (\texttt{MatView}: puntero + stride) sin copiar datos, igual que en \texttt{serial.cpp}.
+(5) Hay un cutoff opcional por profundidad (cláusula \texttt{if}). Con $n\ge 64$ no fue necesario, porque el número de tareas ya es moderado.
+Número de tareas hoja: $(N/n)^2$ cuadrantes de $C$ (cada uno con $N/n$ productos secuenciales).}
+\nota{Elección de $n=128$: se hizo un barrido de $n\in\{32,\dots,2048\}$ con $p=8$ (tabla y figura en (e)) y $n=128$ fue el más rápido para $N=2048$ (0.32 s) y también para $N=4096$ (2.4 s en una prueba preliminar). Justificación: (i) el bloque de trabajo de una hoja ($3\times128^2\times8$ B = 384 KB) cabe holgadamente en la L2 compartida, así que cada hoja reutiliza datos de caché en lugar de ir a DRAM; (ii) hay $(N/n)^2=256$ tareas sobre cuadrantes de $C$ (y 4096 hojas en total), mucho más que $p=8$, lo que permite balancear la carga entre P y E-cores; (iii) con $n\le64$ crece el overhead de recursión y de creación de tareas, y con $n\ge512$ hay muy pocas tareas (con $n=1024$ hay solo 4 cuadrantes, así que con $p=8$ quedan threads ociosos y el tiempo \emph{empeora}: 0.70 s).}
+\input{tablas/e_alg2_bloques_\pcA}
+\nota{Observaciones Alg.~2 (\pcA, $N=2048$, $n=128$): $T(1)=1.26$ s y $T(8)=0.32$ s; $S(8)=3.94$, $E(8)=0.49$. Es la versión que mejor escala. Su $T(1)$ es mayor que el del Alg.~1 (1.26 vs 0.99 s) por el overhead de la recursión, pero con $p=8$ alcanza el mismo tiempo absoluto y lo supera con $N=4096$ (2.96 vs 3.44 s). El blocking reduce el tráfico a memoria, que es justamente el cuello de botella del Alg.~1.}
+
+% ======================================================================
+\section{(d) Algoritmo 3: Numba}
+\begin{lstlisting}[language=Python]
+@njit(parallel=True, cache=True)
+def matmul_prange(A, B, C):
+    N = A.shape[0]
+    for i in prange(N):
+        for k in range(N):
+            a = A[i, k]
+            for j in range(N):
+                C[i, j] += a * B[k, j]
+\end{lstlisting}
+\nota{Antes de medir se hace un warm-up (una llamada con una matriz de $8\times8$, que compila la función JIT para los mismos tipos) y otra llamada de warm-up tras cada \texttt{set\_num\_threads(p)}. Solo se mide la llamada al kernel. La verificación se hace con \texttt{np.allclose(C, A @ B)}.}
+\nota{Observaciones Numba (\pcA, $N=2048$): $T(1)=1.08$ s (solo $\sim$8\% más lento que C++ \texttt{-O3}), $T(8)=0.32$ s, $S(8)=3.35$, $E(8)=0.42$. Con muy poco código se obtiene un rendimiento prácticamente igual al del Alg.~1 en C++, porque compila a LLVM igual que clang y el patrón de acceso es el mismo. Con $N=4096$ escala peor ($S(8)=2.2$ vs 2.5 en C++), posiblemente por la capa de threads por defecto en macOS (\texttt{workqueue}, sin afinidad ni control del scheduling). Ventaja: prototipado rápido. Desventaja: no permite paralelismo de tareas (Alg.~2) ni controlar el scheduling o la afinidad.}
+
+% ======================================================================
+\section{(e) Comparación y escalamiento}
+\begin{figure}[H]\centering
+  \includegraphics[width=\linewidth]{e_escalamiento_\pcA.pdf}
+  \caption{$T(p)$, $S(p)$ y $E(p)$ de las tres versiones con $N=2048$ en \pcA. La línea punteada es la curva ideal.}
+\end{figure}
+\nota{Elección de $T(1)$: se usa el tiempo de \emph{la misma versión} ejecutada con 1 thread (speedup relativo). Así se aísla la escalabilidad de la paralelización y no se mezclan diferencias de implementación serial (por ejemplo, el overhead de la recursión en el Alg. 2 o el JIT en Numba). Para ser transparentes, la tabla incluye también $S_{abs}$ respecto al mejor tiempo serial medido.}
+\begin{figure}[H]\centering
+  \includegraphics[width=\linewidth]{e_alg2_bloques_\pcA.pdf}
+  \caption{Algoritmo 2 con distintos tamaños de bloque $n$, $N=2048$, \pcA.}
+\end{figure}
+\nota{Observaciones (e):
+\begin{itemize}
+\item Ninguna versión se acerca al ideal: $E(8)$ entre 0.39 y 0.49 con $N=2048$. Las tres versiones comparten el mismo patrón (buena eficiencia con $p=2$ y caída con $p=4$ y 8), lo que apunta a una limitación del hardware (memoria compartida y cores heterogéneos) más que a la implementación.
+\item Orden de escalabilidad: Alg.~2 $>$ Numba $\gtrsim$ Alg.~1.
+\item Efecto de $n$ en el Alg.~2: $n=2048$ no tiene tareas, así que $S\approx1$; $n=1024$ tiene solo 4 tareas, por lo que $S(8)<S(4)$. Para $n\le256$ el speedup con $p=8$ está entre 3.2 y 4.6. Los $n$ chicos (32, 64) tienen el mejor $S$ \emph{relativo} (4.2--4.6), porque su $T(1)$ es muy malo, pero en tiempo absoluto pierden contra $n=128$. Esto muestra por qué el speedup relativo debe leerse junto al tiempo absoluto.
+\end{itemize}}
+
+% ======================================================================
+\section{(f) Escalabilidad débil}
+\nota{Definición: con $N$ fijo, $E(p)=T(1)/(p\,T(p))$ es la eficiencia fuerte. Para escalabilidad débil el trabajo por thread debe ser constante, pero como $W\propto N^3$, los $N$ pedidos no permiten mantener $W/p$ exacto (solo $1024\to p{=}1$ y $2048\to p{=}8$). Se define entonces la eficiencia normalizada por trabajo
+$E_w(N,p)=\dfrac{(N/N_0)^3\,T(N_0,1)}{p\,T(N,p)}$ con $N_0=1024$, que compara el rendimiento por thread (FLOP/s/thread) con el caso base serial. $E_w=1$ significa que cada thread rinde lo mismo que un thread solo con el problema chico.}
+\begin{figure}[H]\centering
+  \includegraphics[width=\linewidth]{f_escalabilidad_\pcA.pdf}
+  \caption{Arriba: eficiencia fuerte $E(p)$ para cada $N$. Abajo: eficiencia débil $E_w(N,p)$. \pcA.}
+\end{figure}
+\nota{Observaciones (f): \textbf{el desempeño paralelo no se mantiene al crecer $N$}.
+\begin{itemize}
+\item $E_w(N,8)$: Alg.~1 $0.52\to0.37\to0.28$; Alg.~2 $0.54\to0.46\to0.40$; Numba $0.53\to0.40\to0.26$ para $N=1024\to2048\to4096$.
+\item Explicación: el tamaño de $B$ es 8 MB, 32 MB y 128 MB. Solo con $N=1024$ cabe en la L2 de 16 MB, así que con $N$ mayor las versiones de paralelismo de datos quedan limitadas por el ancho de banda de DRAM, que no crece con $p$.
+\item El Alg.~2 es el que mejor resiste el aumento de $N$, porque sus hojas de 128$\times$128 trabajan en caché independientemente de $N$. Con $N=4096$ y $p=8$ es el más rápido (2.96 s vs 3.44 s del Alg.~1 y 4.01 s de Numba).
+\item También baja $E_w(N,1)$ (por ejemplo 0.87 para el Alg.~1 con $N=4096$): incluso en serial el rendimiento por FLOP empeora con $N$, por el mismo efecto de caché.
+\end{itemize}}
+
+% ======================================================================
+\section{(g) Segundo computador}
+\begin{figure}[H]\centering
+  \includegraphics[width=\linewidth]{e_escalamiento_\pcB.pdf}
+  \caption{$T(p)$, $S(p)$ y $E(p)$ con $N=2048$ en \pcB.}
+\end{figure}
+\input{tablas/bcd_escalamiento_\pcB}
+\begin{figure}[H]\centering
+  \includegraphics[width=\linewidth]{g_comparacion.pdf}
+  \caption{Comparación de ambos computadores con $N=2048$.}
+\end{figure}
+\begin{figure}[H]\centering
+  \includegraphics[width=\linewidth]{e_alg2_bloques_\pcB.pdf}\\[4pt]
+  \includegraphics[width=\linewidth]{f_escalabilidad_\pcB.pdf}
+  \caption{Algoritmo 2 según $n$ y escalabilidad según $N$ en \pcB.}
+\end{figure}
+\nota{PENDIENTE: completar con los resultados de \pcB. Comparar: número de cores físicos/lógicos (¿tiene SMT?), frecuencia, tamaño de caché L2/L3, ancho de banda, compilador (g++ vs clang) y si el PC2 tiene cores homogéneos (P/E en Intel 12ª gen+ o no).}
+
+% ======================================================================
+\section{Conclusiones}
+\nota{(1) El problema base en C++ escala hasta $S\approx3$ con 8 threads en el M5, limitado por memoria. (2) Dividir y conquistar tiene peor tiempo serial, pero escala mejor y es más robusto al crecer $N$ gracias a la localidad de caché; $n$ es un compromiso entre overhead de tareas y paralelismo disponible. (3) Numba logra un rendimiento cercano a C++ con mínimo esfuerzo, pero con menos control. (4) Comparación entre máquinas: PENDIENTE.}
+
+% ======================================================================
+\section*{Declaración de uso de IA}
+Para este trabajo se usó Claude (Anthropic) mediante Claude Code como asistente para: escribir el código de las versiones paralelas, los scripts de benchmarking y de gráficos, y un borrador inicial de la estructura del informe con observaciones sobre los resultados. Todo el código fue revisado y ejecutado por el grupo, los resultados corresponden a mediciones reales en nuestros computadores, y el análisis y la redacción final son de los integrantes.
+\nota{Ajustar según cómo lo usaron realmente.}
+
+\appendix
+\section{Tablas completas}
+\input{tablas/f_escalabilidad_\pcA}
+\input{tablas/e_alg2_bloques_\pcB}
+\input{tablas/f_escalabilidad_\pcB}
+
+\end{document}

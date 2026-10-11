@@ -1,0 +1,16 @@
+label: pc1-mac
+date: 2026-10-11T14:50:11-03:00
+os: Darwin 25.6.0 arm64
+compiler: Apple clang version 21.0.0 (clang-2100.1.1.101) / Apple clang version 21.0.0 (clang-2100.1.1.101)
+python: Python 3.12.13  numba: 0.68.0
+cpu: Apple M5
+physical_cores: 10
+logical_cores: 10
+perf_cores: 4
+eff_cores: 6
+l1d_bytes(P): 131072
+l2_bytes(P): 16777216
+mem_bytes: 17179869184
+clock: Apple no expone la frecuencia via sysctl; buscar la especificacion del chip
+l1d_bytes(E): 65536
+l2_bytes(E): 6291456

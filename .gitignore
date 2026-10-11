@@ -1,0 +1,13 @@
+bin/
+.venv/
+__pycache__/
+*.nbi
+*.nbc
+.DS_Store
+results/*-quick/
+informe/*.aux
+informe/*.log
+informe/*.out
+informe/*.fls
+informe/*.fdb_latexmk
+informe/*.synctex.gz

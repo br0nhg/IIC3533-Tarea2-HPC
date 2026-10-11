@@ -1,0 +1,27 @@
+\begin{table}[H]
+\centering\small
+\caption{Escalamiento fuerte con $N=2048$ en pc1-mac (Alg. 2 con $n=128$). $S_{abs}$ usa como referencia el mejor tiempo serial (0.988 s).}
+\label{tab:bcd_escalamiento_pc1-mac}
+\begin{tabular}{llllll}
+\toprule
+ &  & $T(p)$ [s] & $S(p)$ & $E(p)$ & $S_{abs}(p)$ \\
+Versión & $p$ &  &  &  &  \\
+\midrule
+\multirow[t]{4}{*}{Alg. 1 OpenMP (datos)} & 1 & 0.993 & 1.000 & 1.000 & 0.994 \\
+ & 2 & 0.609 & 1.632 & 0.816 & 1.622 \\
+ & 4 & 0.437 & 2.275 & 0.569 & 2.262 \\
+ & 8 & 0.321 & 3.092 & 0.386 & 3.074 \\
+\cline{1-6}
+\multirow[t]{4}{*}{Alg. 2 OpenMP (D\&C tareas)} & 1 & 1.257 & 1.000 & 1.000 & 0.786 \\
+ & 2 & 0.759 & 1.655 & 0.828 & 1.301 \\
+ & 4 & 0.492 & 2.552 & 0.638 & 2.006 \\
+ & 8 & 0.319 & 3.939 & 0.492 & 3.096 \\
+\cline{1-6}
+\multirow[t]{4}{*}{Alg. 3 Numba (prange)} & 1 & 1.077 & 1.000 & 1.000 & 0.917 \\
+ & 2 & 0.656 & 1.641 & 0.820 & 1.505 \\
+ & 4 & 0.427 & 2.521 & 0.630 & 2.313 \\
+ & 8 & 0.321 & 3.353 & 0.419 & 3.076 \\
+\cline{1-6}
+\bottomrule
+\end{tabular}
+\end{table}
