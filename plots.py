@@ -35,6 +35,7 @@ VERSIONS = {
     "alg3_numba": ("Alg. 3 Numba (prange)", "#1baf7a", "^"),
 }
 MACHINE_LS = ["-", "--"]
+MACHINE_COLORS = ["#4a3aa7", "#e87ba4"]  # violeta / magenta: distintos de los colores de version
 IDEAL = dict(color="#8a8984", ls=":", lw=1.5, label="Ideal")
 SEQ_BLUES = ["#c6dbf3", "#9cc2ec", "#6fa6e2", "#3f86d6", "#2a6bb8", "#1d5294", "#123a6c"]
 
@@ -113,7 +114,7 @@ def setup_p_axis(ax):
 # --------------------------------------------------------------------- (a)
 def fig_a(d, machines):
     fig, ax = plt.subplots(figsize=(5.2, 2.9))
-    colors = ["#2a78d6", "#eb6834"]
+    colors = MACHINE_COLORS
     width = 0.8 / len(machines)
     for k, m in enumerate(machines):
         s = d[(d.machine == m) & (d.version == "serial") & (d.N == N_MAIN)]
@@ -274,6 +275,33 @@ def fig_compare(d, machines):
     save(fig, "g_comparacion")
 
 
+def fig_gflops(d, machines):
+    """Rendimiento absoluto (GFLOP/s = 2N^3/T) con p=8 en funcion de N, ambas maquinas."""
+    fig, axes = plt.subplots(1, 2, figsize=(6.5, 2.6))
+    for ax, p in zip(axes, [1, 8]):
+        for k, m in enumerate(machines):
+            nb = nleaf_main(d, m)
+            for v, (lab, col, mk) in VERSIONS.items():
+                s = d[(d.machine == m) & (d.version == v) & (d.p == p)]
+                if v == "alg2_dc_omp":
+                    s = s[s.n == nb]
+                s = s.groupby("N")["time_s"].min().sort_index()
+                ax.plot(s.index, 2 * s.index.values.astype(float) ** 3 / s.values / 1e9,
+                        color=col, marker=mk, ls=MACHINE_LS[k % 2], mfc=col if k == 0 else "white",
+                        label=f"{label_plt(v)} — {m}")
+        ax.set_xscale("log", base=2)
+        ax.set_xticks([1024, 2048, 4096])
+        ax.set_xticklabels(["1024", "2048", "4096"])
+        ax.set_xlabel("Tamaño $N$")
+        ax.set_title(f"$p={p}$")
+        ax.set_ylim(0, None)
+    axes[0].set_ylabel("Rendimiento [GFLOP/s]")
+    bottom_legend(fig, axes[0], ncol=len(machines))
+    fig.suptitle("(g) Rendimiento absoluto $2N^3/T$ según $N$ (continua: "
+                 f"{machines[0]}, punteada: {machines[1]})")
+    save(fig, "g_gflops")
+
+
 def machine_table(machines):
     keys = ["cpu", "physical_cores", "logical_cores", "perf_cores", "eff_cores", "os", "compiler"]
     data = {}
@@ -322,6 +350,7 @@ def main():
         fig_weak(d, m)
     if len(machines) > 1:
         fig_compare(d, machines)
+        fig_gflops(d, machines)
     machine_table(machines)
     print("Figuras en", FIGS, "| Tablas en", TABS)
 

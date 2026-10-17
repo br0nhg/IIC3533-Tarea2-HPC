@@ -1,0 +1,27 @@
+\begin{table}[H]
+\centering\small
+\caption{Escalamiento fuerte con $N=2048$ en pc2-ubuntu (Alg. 2 con $n=128$). $S_{abs}$ usa como referencia el mejor tiempo serial (1.367 s).}
+\label{tab:bcd_escalamiento_pc2-ubuntu}
+\begin{tabular}{llllll}
+\toprule
+ &  & $T(p)$ [s] & $S(p)$ & $E(p)$ & $S_{abs}(p)$ \\
+Versión & $p$ &  &  &  &  \\
+\midrule
+\multirow[t]{4}{*}{Alg. 1 OpenMP (datos)} & 1 & 4.239 & 1.000 & 1.000 & 0.323 \\
+ & 2 & 2.115 & 2.004 & 1.002 & 0.646 \\
+ & 4 & 1.325 & 3.200 & 0.800 & 1.032 \\
+ & 8 & 0.927 & 4.575 & 0.572 & 1.476 \\
+\cline{1-6}
+\multirow[t]{4}{*}{Alg. 2 OpenMP (D\&C tareas)} & 1 & 1.503 & 1.000 & 1.000 & 0.910 \\
+ & 2 & 0.785 & 1.915 & 0.957 & 1.742 \\
+ & 4 & 0.480 & 3.132 & 0.783 & 2.850 \\
+ & 8 & 0.365 & 4.121 & 0.515 & 3.750 \\
+\cline{1-6}
+\multirow[t]{4}{*}{Alg. 3 Numba (prange)} & 1 & 3.476 & 1.000 & 1.000 & 0.393 \\
+ & 2 & 1.823 & 1.906 & 0.953 & 0.750 \\
+ & 4 & 1.181 & 2.943 & 0.736 & 1.157 \\
+ & 8 & 0.905 & 3.840 & 0.480 & 1.511 \\
+\cline{1-6}
+\bottomrule
+\end{tabular}
+\end{table}

@@ -33,8 +33,29 @@
 % ======================================================================
 \section{Metodología}
 \subsection{Computadores}
-\input{tablas/g_maquinas}
-\nota{Completar la frecuencia de reloj. PC1: Apple M5, 10 cores físicos = 4 de rendimiento (P) + 6 de eficiencia (E), sin SMT (físicos = lógicos); la frecuencia máxima de los P-cores es $\approx$ X GHz según la especificación de Apple, ya que macOS no la expone. PC2: ver \texttt{results/\pcB/machine.txt} (\texttt{lscpu}).}
+\begin{table}[H]
+\centering\small
+\caption{Características de los computadores usados.}
+\label{tab:maquinas}
+\begin{tabular}{lll}
+\toprule
+ & \textbf{PC1 (\pcA)} & \textbf{PC2 (\pcB)} \\
+\midrule
+CPU & Apple M5 (ARM64) & AMD Ryzen 5 3600X (x86-64, Zen 2) \\
+Cores físicos & 10 (4 P-cores + 6 E-cores) & 6 (homogéneos) \\
+Cores lógicos & 10 (sin SMT) & 12 (SMT, 2 hilos/core) \\
+Frecuencia de reloj & \textbf{COMPLETAR} GHz (P-cores, máx.) & 3.8 GHz base / 4.4 GHz boost \\
+Caché L1d & 128 KB/P-core, 64 KB/E-core & 32 KB/core \\
+Caché L2 & 16 MB (clúster P) + 6 MB (clúster E) & 512 KB/core \\
+Caché L3 & -- & 16 MB (según \texttt{lscpu}) \\
+Memoria & 16 GB LPDDR5X unificada & 12 GB visibles en WSL2 (DDR4) \\
+Sistema operativo & macOS 26 (Darwin 25.6) & Ubuntu 24.04 sobre WSL2 (Windows) \\
+Compilador C++ & Apple clang 21 + libomp & g++ 13.3 (libgomp) \\
+Python / Numba & 3.12 / 0.68 & 3.14 / 0.68 \\
+\bottomrule
+\end{tabular}
+\end{table}
+\nota{Completar la frecuencia del M5: macOS no la expone por \texttt{sysctl}, así que hay que tomarla de la especificación de Apple. La L1d del Ryzen aparece en \texttt{lscpu} como 192 KiB en 6 instancias, es decir, 32 KB por core. El PC2 corre Ubuntu dentro de WSL2 (máquina virtual de Windows), lo que puede agregar algo de ruido y hace que el scheduler de Windows decida la ubicación final de los threads.}
 
 \subsection{Compilación, medición y verificación}
 \begin{itemize}
@@ -44,6 +65,7 @@
   \item \textbf{Verificación:} cada versión paralela compara la matriz $C$ completa contra la multiplicación serial de referencia (error máximo $=0$ en todas las pruebas) y entrega el mismo checksum que \texttt{serial.cpp}.
   \item Threads: \texttt{OMP\_NUM\_THREADS=p} en C++ y \texttt{numba.set\_num\_threads(p)} en Python. En Linux se usa \texttt{OMP\_PROC\_BIND=close}, \texttt{OMP\_PLACES=cores}; macOS no permite fijar la afinidad.
   \item Todo el código y los datos crudos están en el repositorio \url{https://github.com/br0nhg/IIC3533-Tarea2-HPC} (\texttt{run\_all.sh} reproduce todos los experimentos).
+  \item Además de $T$, $S$ y $E$, se reporta el rendimiento absoluto en GFLOP/s $=2N^3/T$, que permite comparar distintos $N$ y distintas máquinas en la misma escala.
 \end{itemize}
 
 % ======================================================================
@@ -60,6 +82,7 @@
 \item Overhead: con hojas de $n$ hay $(N/n)^3$ llamadas a \texttt{multiply\_leaf} (262\,144 con $n=32$, frente a 1 con $n=N$), y el loop interno tiene solo $n$ iteraciones (32 doubles = 2 líneas de caché de 128 B). Esto se traduce en más saltos, prólogo y epílogo de vectorización y peor prefetch.
 \item Las tres submatrices de una hoja ocupan $3\cdot 8n^2$ B: 24 KB ($n=32$), 96 KB ($n=64$, cabe en L1D de 128 KB), 384 KB ($n=128$) y 1.5 MB ($n=256$). Aun cuando caben en L1/L2, la ganancia de localidad no compensa el overhead.
 \item Lo importante es que este resultado es \emph{serial}. En paralelo, donde varios cores comparten la L2 y el ancho de banda, el blocking sí ayuda (ver (c) y (f)).
+\item \textbf{Contraste con \pcB\ (Ryzen):} ahí el comportamiento es el \emph{opuesto} y muestra la clásica curva en U. Sin subdividir ($n=2048$) tarda 3.92 s; el óptimo está en $n=512$--$128$ (1.37--1.38 s), es decir, \textbf{2.9$\times$ más rápido}, y con $n=32$ vuelve a subir (1.77 s) por el overhead. En el Ryzen, $B$ (32 MB) no cabe en la L3 de 16 MB, la L2 es de solo 512 KB por core y el ancho de banda DDR4 es mucho menor, así que la versión sin bloques queda limitada por memoria (4.4 GFLOP/s con $N=2048$, frente a 12.8 GFLOP/s con $N=1024$, donde $B=8$ MB sí cabe en L3). El blocking mantiene los datos de la hoja en caché, lo que compensa con creces el overhead de la recursión. Conclusión: el mejor $n$ depende de la jerarquía de memoria de cada máquina.
 \end{itemize}}
 
 % ======================================================================
@@ -156,6 +179,7 @@ $E_w(N,p)=\dfrac{(N/N_0)^3\,T(N_0,1)}{p\,T(N,p)}$ con $N_0=1024$, que compara el
 \item $E_w(N,8)$: Alg.~1 $0.52\to0.37\to0.28$; Alg.~2 $0.54\to0.46\to0.40$; Numba $0.53\to0.40\to0.26$ para $N=1024\to2048\to4096$.
 \item Explicación: el tamaño de $B$ es 8 MB, 32 MB y 128 MB. Solo con $N=1024$ cabe en la L2 de 16 MB, así que con $N$ mayor las versiones de paralelismo de datos quedan limitadas por el ancho de banda de DRAM, que no crece con $p$.
 \item El Alg.~2 es el que mejor resiste el aumento de $N$, porque sus hojas de 128$\times$128 trabajan en caché independientemente de $N$. Con $N=4096$ y $p=8$ es el más rápido (2.96 s vs 3.44 s del Alg.~1 y 4.01 s de Numba).
+\item \textbf{En \pcB\ el efecto es mucho más fuerte}: $E_w(N,8)$ del Alg.~1 cae $0.55\to0.19\to0.12$ y el de Numba $0.48\to0.17\to0.11$, porque al pasar de $N=1024$ a 2048 la matriz $B$ deja de caber en la L3 (el rendimiento serial cae de 12.8 a 4.4 GFLOP/s). En cambio, el Alg.~2 \emph{mantiene e incluso mejora} su eficiencia débil ($0.49\to0.50\to0.57$) y su rendimiento con $p=8$ crece de 46 a 54 GFLOP/s. Con $N=4096$ y $p=8$ el Alg.~2 es 4.5$\times$ más rápido que el Alg.~1 (2.55 s vs 11.58 s). Este es el resultado más claro del trabajo: la escalabilidad débil depende de que el working set de cada thread quepa en caché, y eso es justamente lo que garantiza el blocking.
 \item También baja $E_w(N,1)$ (por ejemplo 0.87 para el Alg.~1 con $N=4096$): incluso en serial el rendimiento por FLOP empeora con $N$, por el mismo efecto de caché.
 \end{itemize}}
 
@@ -168,18 +192,32 @@ $E_w(N,p)=\dfrac{(N/N_0)^3\,T(N_0,1)}{p\,T(N,p)}$ con $N_0=1024$, que compara el
 \input{tablas/bcd_escalamiento_\pcB}
 \begin{figure}[H]\centering
   \includegraphics[width=\linewidth]{g_comparacion.pdf}
-  \caption{Comparación de ambos computadores con $N=2048$.}
+  \caption{Comparación de ambos computadores con $N=2048$ (Alg.~2 con $n=128$). Línea continua y marcadores rellenos: \pcA; línea punteada y marcadores vacíos: \pcB.}
+\end{figure}
+\begin{figure}[H]\centering
+  \includegraphics[width=\linewidth]{g_gflops.pdf}
+  \caption{Rendimiento absoluto (GFLOP/s) según $N$ con $p=1$ y $p=8$ en ambos computadores (Alg.~2 con $n=128$).}
 \end{figure}
 \begin{figure}[H]\centering
   \includegraphics[width=\linewidth]{e_alg2_bloques_\pcB.pdf}\\[4pt]
   \includegraphics[width=\linewidth]{f_escalabilidad_\pcB.pdf}
   \caption{Algoritmo 2 según $n$ y escalabilidad según $N$ en \pcB.}
 \end{figure}
-\nota{PENDIENTE: completar con los resultados de \pcB. Comparar: número de cores físicos/lógicos (¿tiene SMT?), frecuencia, tamaño de caché L2/L3, ancho de banda, compilador (g++ vs clang) y si el PC2 tiene cores homogéneos (P/E en Intel 12ª gen+ o no).}
+\nota{Observaciones (g). Correctitud: las tres versiones entregan el mismo checksum en ambas máquinas (error máximo $=0$ frente a la referencia), lo que confirma la inicialización determinista.
+\begin{itemize}
+\item \textbf{Tiempo serial:} el M5 es 4$\times$ más rápido en el problema base ($n=N$): 0.99 s frente a 3.92 s con $N=2048$. La diferencia no se explica por la frecuencia (del mismo orden en ambas) sino por la memoria. El M5 tiene una L2 de 16 MB y memoria unificada LPDDR5X de gran ancho de banda, mientras que el Ryzen usa DDR4 de doble canal. Además, el M5 mantiene $\sim$16--18 GFLOP/s para todo $N$, mientras que el Ryzen cae de 12.8 a $\sim$4 GFLOP/s cuando $B$ deja de caber en L3. Con blocking (\texttt{serial.cpp} con $n=128$) la diferencia se reduce a 1.26 frente a 1.38 s.
+\item \textbf{Speedup:} en el Ryzen, el Alg.~1 tiene \emph{mejor} speedup relativo ($S(8)=4.58$ frente a 3.09 con $N=2048$), pero su tiempo absoluto es 2.9$\times$ peor (0.93 frente a 0.32 s). Su $T(1)$ es tan lento (está limitado por la latencia de memoria) que más threads ayudan a tener más accesos en vuelo. Esto muestra por qué el speedup relativo debe leerse junto al tiempo absoluto.
+\item \textbf{Límite de memoria:} con $N=4096$, el Alg.~1 y Numba en el Ryzen no mejoran de $p=4$ a $p=8$ (11.5 $\to$ 11.6 s y 11.2 $\to$ 11.6 s): el ancho de banda DDR4 queda saturado con 4 threads. El Alg.~2 sí sigue escalando ($S(8)=4.62$) y con $p=8$ alcanza 54 GFLOP/s, \emph{superando} al M5 (46 GFLOP/s) en la misma configuración.
+\item \textbf{Cores y SMT:} el Ryzen tiene 6 cores físicos homogéneos con SMT. Con $p=8$, 2 cores ejecutan 2 hilos cada uno y comparten FPU, L1 y L2, por lo que de $p=4$ a $p=8$ la ganancia es sublineal. El M5 tiene 10 cores físicos sin SMT, pero solo 4 son P-cores; con $p=8$ al menos 4 threads corren en E-cores más lentos. En ambos casos, $p=8$ no equivale a 8 cores iguales.
+\item \textbf{Elección de $n$:} en el Ryzen, el barrido con $p=8$ da $n=64$, 128 y 256 prácticamente empatados (0.35--0.36 s, dentro del ruido). $n=128$ es razonable en ambas máquinas: $3\times128^2\times8$ B = 384 KB cabe en la L2 de 512 KB de un core Zen 2 y en la L2 del M5.
+\item \textbf{Anomalías:} con $n=2048$ (sin tareas) el tiempo del Alg.~2 en el Ryzen \emph{aumenta} con $p$ (3.54 a 4.05 s). Una hipótesis es que los threads ociosos hacen busy-wait (libgomp) en la barrera y reducen la frecuencia boost del core que trabaja. Con $n=1024$ y $p=2$ no hay ganancia (1.92 frente a 1.89 s): las 4 tareas leen cuadrantes distintos de $B$ de 8 MB cada uno y saturan la memoria, a diferencia del Alg.~1, donde los threads comparten las mismas filas de $B$ en caché.
+\item \textbf{Numba vs C++:} en el Ryzen, Numba es incluso más rápido que g++ con 1 thread (3.48 frente a 4.24 s con $N=2048$). Ambos compiladores generan código distinto (LLVM frente a GCC), pero los dos quedan limitados por memoria.
+\item \textbf{Ruido:} el PC2 corre bajo WSL2, y algunas mediciones tienen más variabilidad (por ejemplo Numba con $N=1024$ y $p=2$). Por eso se reporta la mediana.
+\end{itemize}}
 
 % ======================================================================
 \section{Conclusiones}
-\nota{(1) El problema base en C++ escala hasta $S\approx3$ con 8 threads en el M5, limitado por memoria. (2) Dividir y conquistar tiene peor tiempo serial, pero escala mejor y es más robusto al crecer $N$ gracias a la localidad de caché; $n$ es un compromiso entre overhead de tareas y paralelismo disponible. (3) Numba logra un rendimiento cercano a C++ con mínimo esfuerzo, pero con menos control. (4) Comparación entre máquinas: PENDIENTE.}
+\nota{(1) El problema base en C++ escala hasta $S\approx3$ con 8 threads en el M5, limitado por memoria. (2) Dividir y conquistar tiene peor tiempo serial, pero escala mejor y es más robusto al crecer $N$ gracias a la localidad de caché; $n$ es un compromiso entre overhead de tareas y paralelismo disponible. (3) Numba logra un rendimiento cercano a C++ con mínimo esfuerzo, pero con menos control. (4) Entre máquinas, la jerarquía de memoria domina más que la frecuencia o el número de cores: en el M5 (L2 grande y alto ancho de banda) la versión simple ya es eficiente, mientras que en el Ryzen el blocking es indispensable (2.9$\times$ en serial y 4.5$\times$ con $N=4096$, $p=8$). (5) La escalabilidad débil solo se mantiene en el Alg.~2, cuyo working set por tarea es independiente de $N$.}
 
 % ======================================================================
 \section*{Declaración de uso de IA}
